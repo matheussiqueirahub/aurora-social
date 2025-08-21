@@ -1,0 +1,14 @@
+name: Bug report
+description: Reporte um problema
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: O que aconteceu?, description: Descreva o bug }
+    validations: { required: true }
+  - type: textarea
+    id: steps
+    attributes: { label: Passos para reproduzir }
+  - type: textarea
+    id: expected
+    attributes: { label: Comportamento esperado }
