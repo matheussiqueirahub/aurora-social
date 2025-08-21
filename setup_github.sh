@@ -2,25 +2,33 @@
 set -euo pipefail
 
 # --- Configuration ---
-REPO="${REPO:-siqueirahub/aurora-social}"
+REPO="${REPO:-siqueirahub/aurora-social}"   # pode passar só o nome (ex.: REPO=aurora-social)
 DIR="${DIR:-app-social}"
-VISIBILITY="${VISIBILITY:-public}"  # public | private | internal (orgs)
+VISIBILITY="${VISIBILITY:-public}"           # public | private | internal (orgs)
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
 
 # --- Helpers ---
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# --- Normalize REPO owner (usa usuário logado no gh se faltar owner)
-if [[ "$REPO" != */* ]]; then
-  if have gh; then
-    OWNER="$(gh api user -q .login 2>/dev/null || echo '')"
-    if [ -n "$OWNER" ]; then REPO="$OWNER/$REPO"; fi
-  fi
-fi
-
 echo "🔎 Checking dependencies..."
 have git || { echo "❌ git not found. Install git and retry."; exit 1; }
 have gh  || { echo "❌ GitHub CLI (gh) not found. Install from https://cli.github.com/ and retry."; exit 1; }
+
+# --- Normalize REPO owner (usa usuário logado no gh se faltar owner) ---
+if [[ "$REPO" != */* ]]; then
+  if gh auth status >/dev/null 2>&1; then
+    OWNER="$(gh api user -q .login 2>/dev/null || echo '')"
+    if [ -n "$OWNER" ]; then
+      REPO="$OWNER/$REPO"
+    else
+      echo "❌ Could not resolve GitHub owner. Provide REPO in OWNER/REPO format."
+      exit 1
+    fi
+  else
+    echo "❌ You are not logged in (gh). Run: gh auth login"
+    exit 1
+  fi
+fi
 
 echo "🔐 Checking GitHub auth..."
 if ! gh auth status >/dev/null 2>&1; then
@@ -44,7 +52,7 @@ fi
 
 git add .
 if ! git diff --cached --quiet; then
-  git commit -m "chore: initial public release (aurora-social)"
+  git commit -m "chore: initial public release (aurora-social)" || true
 fi
 
 git branch -M "$DEFAULT_BRANCH"
@@ -68,7 +76,7 @@ else
 fi
 
 echo "⬆️ Pushing '$DEFAULT_BRANCH'..."
-git push -u origin "$DEFAULT_BRANCH"
+git push -u origin "$DEFAULT_BRANCH" || true
 
 # --- Create .github templates if missing ---
 mkdir -p .github/ISSUE_TEMPLATE
@@ -110,8 +118,8 @@ fi
 # Commit templates if newly created
 if ! git diff --quiet .github; then
   git add .github
-  git commit -m "docs: add issue templates"
-  git push
+  git commit -m "docs: add issue templates" || true
+  git push || true
 fi
 
 # --- Labels (idempotent) ---
@@ -127,23 +135,15 @@ labels=(
 for pair in "${labels[@]}"; do
   name="${pair%%:*}"
   color="${pair##*:}"
-  if gh label list --repo "$REPO" | grep -q -i "^${name}\b"; then
+  # se já existe, só informa; se não, cria
+  if gh label list -R "$REPO" | grep -qi "^${name}\b"; then
     echo "• $name already exists"
   else
     gh label create "$name" -R "$REPO" -c "${color}" -d "" || true
   fi
 done
 
-# --- Milestones ---
-echo "🎯 Creating milestones (if missing)..."
-declare -A milestones=(
-  ["M1-Backend CRUD+PDF"]="Back-end com CRUD e PDF por inscrito"
-  ["M2-Mobile Offline"]="Coleta offline e sincronização"
-  ["M3-Admin & Filtros"]="Django Admin + filtros avançados"
-  ["M4-Hardening & Docs"]="Segurança, testes e documentação"
-)
-
-# --- Milestones ---
+# --- Milestones (POSIX friendly) ---
 echo "🎯 Creating milestones (if missing)..."
 
 MILESTONES_LIST=$(cat <<'EOF'
@@ -154,39 +154,14 @@ M4-Hardening & Docs|Segurança, testes e documentação
 EOF
 )
 
-EXISTING_MS_JSON="$(gh api "repos/${REPO}/milestones" 2>/dev/null || echo '[]')"
+EXISTING_MS_JSON="$(gh api -R "$REPO" "repos/${REPO}/milestones" 2>/dev/null || echo '[]')"
 
 while IFS='|' read -r title description; do
-  [ -z "$title" ] && continue
+  [ -z "${title:-}" ] && continue
   if echo "$EXISTING_MS_JSON" | grep -q "\"title\": \"${title}\""; then
     echo "• Milestone '${title}' already exists"
   else
-    gh api -X POST "repos/${REPO}/milestones" \
-      -f title="$title" \
-      -f state="open" \
-      -f description="$description" >/dev/null && \
-    echo "• Created milestone '${title}'"
-  fi
-done <<EOF
-$MILESTONES_LIST# --- Milestones ---
-echo "🎯 Creating milestones (if missing)..."
-
-MILESTONES_LIST=$(cat <<'EOF'
-M1-Backend CRUD+PDF|Back-end com CRUD e PDF por inscrito
-M2-Mobile Offline|Coleta offline e sincronização
-M3-Admin & Filtros|Django Admin + filtros avançados
-M4-Hardening & Docs|Segurança, testes e documentação
-EOF
-)
-
-EXISTING_MS_JSON="$(gh api "repos/${REPO}/milestones" 2>/dev/null || echo '[]')"
-
-while IFS='|' read -r title description; do
-  [ -z "$title" ] && continue
-  if echo "$EXISTING_MS_JSON" | grep -q "\"title\": \"${title}\""; then
-    echo "• Milestone '${title}' already exists"
-  else
-    gh api -X POST "repos/${REPO}/milestones" \
+    gh api -R "$REPO" -X POST "repos/${REPO}/milestones" \
       -f title="$title" \
       -f state="open" \
       -f description="$description" >/dev/null && \
@@ -198,9 +173,10 @@ EOF
 
 # --- Optional: create user project (beta) ---
 if gh project --help >/dev/null 2>&1; then
-  if ! gh project list --owner "${REPO%%/*}" --limit 100 | grep -q "^Aurora Social"; then
+  OWNER_PART="${REPO%%/*}"
+  if ! gh project list --owner "$OWNER_PART" --limit 100 | grep -q "^Aurora Social"; then
     echo "🗂️ Creating user project 'Aurora Social' (kanban)..."
-    gh project create "Aurora Social" --owner "${REPO%%/*}" --format=kanban >/dev/null || true
+    gh project create "Aurora Social" --owner "$OWNER_PART" --format=kanban >/dev/null || true
   else
     echo "• Project 'Aurora Social' already exists (skip)"
   fi
@@ -208,4 +184,5 @@ fi
 
 echo "✅ Done! Repository ready: https://github.com/$REPO
 Tip: You can set defaults when running:
-  REPO=siqueirahub/aurora-social DIR=app-social ./setup_github.sh
+  REPO=matheussiqueirahub/aurora-social DIR=. ./setup_github.sh
+"
