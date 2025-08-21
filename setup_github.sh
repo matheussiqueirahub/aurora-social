@@ -135,17 +135,33 @@ declare -A milestones=(
   ["M4-Hardening & Docs"]="Segurança, testes e documentação"
 )
 
-for title in "${!milestones[@]}"; do
-  if gh api "repos/${REPO}/milestones" | grep -q "\"title\": \"${title}\""; then
+# --- Milestones ---
+echo "🎯 Creating milestones (if missing)..."
+
+MILESTONES_LIST=$(cat <<'EOF'
+M1-Backend CRUD+PDF|Back-end com CRUD e PDF por inscrito
+M2-Mobile Offline|Coleta offline e sincronização
+M3-Admin & Filtros|Django Admin + filtros avançados
+M4-Hardening & Docs|Segurança, testes e documentação
+EOF
+)
+
+EXISTING_MS_JSON="$(gh api "repos/${REPO}/milestones" 2>/dev/null || echo '[]')"
+
+while IFS='|' read -r title description; do
+  [ -z "$title" ] && continue
+  if echo "$EXISTING_MS_JSON" | grep -q "\"title\": \"${title}\""; then
     echo "• Milestone '${title}' already exists"
   else
     gh api -X POST "repos/${REPO}/milestones" \
-      -f title="${title}" \
+      -f title="$title" \
       -f state="open" \
-      -f description="${milestones[$title]}" >/dev/null
+      -f description="$description" >/dev/null && \
     echo "• Created milestone '${title}'"
   fi
-done
+done <<EOF
+$MILESTONES_LIST
+EOF
 
 # --- Optional: create user project (beta) ---
 if gh project --help >/dev/null 2>&1; then
