@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # --- Configuration ---
-REPO="${REPO:-siqueirahub/aurora-social}"   # pode passar só o nome (ex.: REPO=aurora-social)
-DIR="${DIR:-app-social}"
-VISIBILITY="${VISIBILITY:-public}"           # public | private | internal (orgs)
+REPO="${REPO:-aurora-social}"          # Pode ser só o nome; o script completa com o owner logado
+DIR="${DIR:-.}"
+VISIBILITY="${VISIBILITY:-public}"     # public | private | internal (orgs)
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
 
 # --- Helpers ---
@@ -14,26 +14,17 @@ echo "🔎 Checking dependencies..."
 have git || { echo "❌ git not found. Install git and retry."; exit 1; }
 have gh  || { echo "❌ GitHub CLI (gh) not found. Install from https://cli.github.com/ and retry."; exit 1; }
 
-# --- Normalize REPO owner (usa usuário logado no gh se faltar owner) ---
-if [[ "$REPO" != */* ]]; then
-  if gh auth status >/dev/null 2>&1; then
-    OWNER="$(gh api user -q .login 2>/dev/null || echo '')"
-    if [ -n "$OWNER" ]; then
-      REPO="$OWNER/$REPO"
-    else
-      echo "❌ Could not resolve GitHub owner. Provide REPO in OWNER/REPO format."
-      exit 1
-    fi
-  else
-    echo "❌ You are not logged in (gh). Run: gh auth login"
-    exit 1
-  fi
-fi
-
 echo "🔐 Checking GitHub auth..."
 if ! gh auth status >/dev/null 2>&1; then
   echo "You are not logged in with gh. Opening browser to authenticate..."
   gh auth login -w -s 'repo,read:org,project'
+fi
+
+# --- Normalize REPO owner (usa usuário logado no gh se faltar owner) ---
+if [[ "$REPO" != */* ]]; then
+  OWNER="$(gh api user -q .login 2>/dev/null || echo '')"
+  [ -z "$OWNER" ] && { echo "❌ Could not resolve GitHub owner. Provide REPO as OWNER/REPO."; exit 1; }
+  REPO="$OWNER/$REPO"
 fi
 
 # --- Ensure directory exists ---
@@ -54,12 +45,10 @@ git add .
 if ! git diff --cached --quiet; then
   git commit -m "chore: initial public release (aurora-social)" || true
 fi
-
 git branch -M "$DEFAULT_BRANCH"
 
 # --- Create or connect remote repo ---
 echo "🌐 Ensuring remote repository '$REPO' exists..."
-
 if gh repo view "$REPO" >/dev/null 2>&1; then
   echo "✅ Remote repository exists."
   if git remote get-url origin >/dev/null 2>&1; then
@@ -78,7 +67,7 @@ fi
 echo "⬆️ Pushing '$DEFAULT_BRANCH'..."
 git push -u origin "$DEFAULT_BRANCH" || true
 
-# --- Create .github templates if missing ---
+# --- .github templates (idempotente) ---
 mkdir -p .github/ISSUE_TEMPLATE
 if [ ! -f .github/ISSUE_TEMPLATE/bug_report.yml ]; then
   cat > .github/ISSUE_TEMPLATE/bug_report.yml <<'YAML'
@@ -115,37 +104,34 @@ body:
 YAML
 fi
 
-# Commit templates if newly created
 if ! git diff --quiet .github; then
   git add .github
   git commit -m "docs: add issue templates" || true
   git push || true
 fi
 
-# --- Labels (idempotent) ---
+# --- Labels (idempotente) ---
 echo "🏷️ Creating labels (if missing)..."
 labels=(
-  "bug:#B60205"
-  "enhancement:#1D76DB"
-  "documentation:#0075CA"
-  "good-first-issue:#7057FF"
-  "priority:high:#D73A4A"
+  "bug|#B60205"
+  "enhancement|#1D76DB"
+  "documentation|#0075CA"
+  "good-first-issue|#7057FF"
+  "priority:high|#D73A4A"
 )
 
 for pair in "${labels[@]}"; do
-  name="${pair%%:*}"
-  color="${pair##*:}"
-  # se já existe, só informa; se não, cria
+  name="${pair%%|*}"
+  color="${pair##*|}"
   if gh label list -R "$REPO" | grep -qi "^${name}\b"; then
     echo "• $name already exists"
   else
-    gh label create "$name" -R "$REPO" -c "${color}" -d "" || true
+    gh label create "$name" -R "$REPO" -c "$color" -d "" || true
   fi
 done
 
 # --- Milestones (POSIX friendly) ---
 echo "🎯 Creating milestones (if missing)..."
-
 MILESTONES_LIST=$(cat <<'EOF'
 M1-Backend CRUD+PDF|Back-end com CRUD e PDF por inscrito
 M2-Mobile Offline|Coleta offline e sincronização
@@ -154,14 +140,14 @@ M4-Hardening & Docs|Segurança, testes e documentação
 EOF
 )
 
-EXISTING_MS_JSON="$(gh api -R "$REPO" "repos/${REPO}/milestones" 2>/dev/null || echo '[]')"
+EXISTING_MS_JSON="$(gh api "repos/${REPO}/milestones" 2>/dev/null || echo '[]')"
 
 while IFS='|' read -r title description; do
   [ -z "${title:-}" ] && continue
   if echo "$EXISTING_MS_JSON" | grep -q "\"title\": \"${title}\""; then
     echo "• Milestone '${title}' already exists"
   else
-    gh api -R "$REPO" -X POST "repos/${REPO}/milestones" \
+    gh api -X POST "repos/${REPO}/milestones" \
       -f title="$title" \
       -f state="open" \
       -f description="$description" >/dev/null && \
@@ -171,18 +157,10 @@ done <<EOF
 $MILESTONES_LIST
 EOF
 
-# --- Optional: create user project (beta) ---
-if gh project --help >/dev/null 2>&1; then
-  OWNER_PART="${REPO%%/*}"
-  if ! gh project list --owner "$OWNER_PART" --limit 100 | grep -q "^Aurora Social"; then
-    echo "🗂️ Creating user project 'Aurora Social' (kanban)..."
-    gh project create "Aurora Social" --owner "$OWNER_PART" --format=kanban >/dev/null || true
-  else
-    echo "• Project 'Aurora Social' already exists (skip)"
-  fi
-fi
+# --- Skip Project creation (CLI atual não dá suporte simples) ---
+echo "ℹ️ Skipping automatic Project creation. Create it via GitHub UI if needed."
 
 echo "✅ Done! Repository ready: https://github.com/$REPO
 Tip: You can set defaults when running:
-  REPO=matheussiqueirahub/aurora-social DIR=. ./setup_github.sh
+  REPO=$(gh api user -q .login)/aurora-social DIR=. ./setup_github.sh
 "
