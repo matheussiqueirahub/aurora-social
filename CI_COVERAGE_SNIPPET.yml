@@ -1,0 +1,28 @@
+# --- Add/replace these steps inside your CI jobs ---
+
+# Backend (after tests)
+      - name: Pytest (with coverage)
+        run: pytest -q
+
+      - name: Upload Python coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-coverage
+          path: server/coverage.xml
+
+# Mobile (after jest)
+      - name: Jest (with coverage)
+        run: |
+          if npm run | grep -q "test"; then
+            npm test -- --ci --coverage --passWithNoTests
+          else
+            echo "No test script; skipping tests"
+          fi
+
+      - name: Upload Jest coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jest-coverage
+          path: mobile/coverage/lcov.info

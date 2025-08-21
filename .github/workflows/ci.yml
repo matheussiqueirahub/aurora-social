@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Django)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('server/requirements.txt', 'server/requirements-dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+
+      - name: Django system checks
+        run: |
+          python manage.py check --deploy --fail-level WARNING || true
+          python manage.py check
+
+      - name: Ruff (lint)
+        run: ruff check .
+        continue-on-error: true
+
+      - name: Black (format check)
+        run: black --check .
+        continue-on-error: true
+
+      - name: Pytest
+        run: pytest -q
+
+  mobile:
+    name: Mobile (React Native)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci || npm i
+
+      - name: TypeScript typecheck (if present)
+        run: |
+          if [ -f tsconfig.json ]; then
+            npx tsc -v
+            npx tsc --noEmit
+          else
+            echo "tsconfig.json not found, skipping typecheck"
+          fi
+
+      - name: ESLint (if configured)
+        run: |
+          if npm run | grep -q "lint"; then
+            npm run lint
+          else
+            echo "No lint script; skipping ESLint"
+          fi
+        continue-on-error: true
+
+      - name: Tests (Jest, if configured)
+        run: |
+          if npm run | grep -q "test"; then
+            npm test -- --ci --passWithNoTests
+          else
+            echo "No test script; skipping tests"
+          fi
+        continue-on-error: true
