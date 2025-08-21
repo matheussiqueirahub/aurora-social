@@ -10,6 +10,14 @@ DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
 # --- Helpers ---
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# --- Normalize REPO owner (usa usuário logado no gh se faltar owner)
+if [[ "$REPO" != */* ]]; then
+  if have gh; then
+    OWNER="$(gh api user -q .login 2>/dev/null || echo '')"
+    if [ -n "$OWNER" ]; then REPO="$OWNER/$REPO"; fi
+  fi
+fi
+
 echo "🔎 Checking dependencies..."
 have git || { echo "❌ git not found. Install git and retry."; exit 1; }
 have gh  || { echo "❌ GitHub CLI (gh) not found. Install from https://cli.github.com/ and retry."; exit 1; }
@@ -136,6 +144,31 @@ declare -A milestones=(
 )
 
 # --- Milestones ---
+echo "🎯 Creating milestones (if missing)..."
+
+MILESTONES_LIST=$(cat <<'EOF'
+M1-Backend CRUD+PDF|Back-end com CRUD e PDF por inscrito
+M2-Mobile Offline|Coleta offline e sincronização
+M3-Admin & Filtros|Django Admin + filtros avançados
+M4-Hardening & Docs|Segurança, testes e documentação
+EOF
+)
+
+EXISTING_MS_JSON="$(gh api "repos/${REPO}/milestones" 2>/dev/null || echo '[]')"
+
+while IFS='|' read -r title description; do
+  [ -z "$title" ] && continue
+  if echo "$EXISTING_MS_JSON" | grep -q "\"title\": \"${title}\""; then
+    echo "• Milestone '${title}' already exists"
+  else
+    gh api -X POST "repos/${REPO}/milestones" \
+      -f title="$title" \
+      -f state="open" \
+      -f description="$description" >/dev/null && \
+    echo "• Created milestone '${title}'"
+  fi
+done <<EOF
+$MILESTONES_LIST# --- Milestones ---
 echo "🎯 Creating milestones (if missing)..."
 
 MILESTONES_LIST=$(cat <<'EOF'
